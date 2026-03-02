@@ -64,15 +64,26 @@ def main():
 
     # System
     section("System")
-    uname = platform.uname()
     uptime_s = int(psutil.boot_time())
     import time
     uptime = int(time.time()) - uptime_s
     h, m = divmod(uptime // 60, 60)
     hostname = os.uname().nodename
+
+    os_name = None
+    os_release_path = "/etc/os-release"
+    if os.path.exists(os_release_path):
+        with open(os_release_path) as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    os_name = line.split("=", 1)[1].strip().strip('"')
+                    break
+    if not os_name:
+        os_name = f"{platform.system()} {platform.release()}"
+
     print(f"  Hostname:     {hostname}")
-    print(f"  OS:           {platform.system()} {platform.release()}")
-    print(f"  Kernel:       {uname.version.split()[0] if uname.version else uname.release}")
+    print(f"  OS:           {os_name}")
+    print(f"  Kernel:       {platform.release()}")
     print(f"  Uptime:       {h}h {m:02d}m")
 
     # CPU
