@@ -41,6 +41,87 @@ def get_temps():
     return cpu_temp, fan_rpm
 
 
+def get_gpu_info():
+    gpus = []
+
+    # NVIDIA
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,clocks.current.graphics",
+             "--format=csv,noheader,nounits"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            gpus.append({
+                "typ": "NVIDIA",
+                "name": parts[0],
+                "temp": f"{parts[1]}°C" if parts[1] != "[N/A]" else None,
+                "auslastung": float(parts[2]) if parts[2] not in ("[N/A]", "") else None,
+                "vram_used": int(parts[3]) if parts[3] not in ("[N/A]", "") else None,
+                "vram_total": int(parts[4]) if parts[4] not in ("[N/A]", "") else None,
+                "takt": f"{parts[5]} MHz" if parts[5] not in ("[N/A]", "") else None,
+            })
+        if gpus:
+            return gpus
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    # AMD
+    try:
+        out = subprocess.check_output(["lspci"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if "AMD" in line and ("VGA" in line or "Display" in line or "3D" in line):
+                name = line.split(":")[-1].strip()
+                temp = read_sys("/sys/class/drm/card0/device/hwmon/hwmon0/temp1_input")
+                takt_cur = read_sys("/sys/class/drm/card0/device/pp_dpm_sclk")
+                gpus.append({
+                    "typ": "AMD",
+                    "name": name,
+                    "temp": f"{int(temp) / 1000:.1f}°C" if temp else None,
+                    "takt": takt_cur,
+                    "auslastung": None,
+                    "vram_used": None,
+                    "vram_total": None,
+                })
+        if gpus:
+            return gpus
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    # Intel
+    try:
+        out = subprocess.check_output(["lspci"], text=True, stderr=subprocess.DEVNULL)
+        for line in out.splitlines():
+            if "Intel" in line and ("VGA" in line or "Display" in line):
+                name = line.split(":")[-1].strip()
+                takt_cur = read_sys("/sys/class/drm/card0/gt_cur_freq_mhz")
+                takt_max = read_sys("/sys/class/drm/card0/gt_boost_freq_mhz")
+                # GPU-Temperatur aus thinkpad-Sensor (falls vorhanden)
+                gpu_temp = None
+                for hwmon in os.listdir("/sys/class/hwmon"):
+                    base = f"/sys/class/hwmon/{hwmon}"
+                    name_val = read_sys(f"{base}/name")
+                    if name_val == "thinkpad":
+                        raw = read_sys(f"{base}/temp2_input")
+                        if raw and int(raw) > 0:
+                            gpu_temp = f"{int(raw) / 1000:.1f}°C"
+                        break
+                gpus.append({
+                    "typ": "Intel",
+                    "name": name,
+                    "temp": gpu_temp,
+                    "takt": f"{takt_cur} MHz (max {takt_max} MHz)" if takt_cur and takt_max else None,
+                    "auslastung": None,
+                    "vram_used": None,
+                    "vram_total": None,
+                })
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    return gpus
+
+
 def get_battery():
     base = "/sys/class/power_supply/BAT0"
     capacity = read_sys(f"{base}/capacity")
@@ -120,6 +201,23 @@ def main():
             print(f"  {part.mountpoint:<14}{bar(usage.percent)}  ({usage.used / 1e9:.1f} / {usage.total / 1e9:.1f} GB)")
         except PermissionError:
             pass
+
+    # GPU
+    gpus = get_gpu_info()
+    if gpus:
+        section("GPU")
+        for gpu in gpus:
+            print(f"  Typ:          {gpu['typ']}")
+            print(f"  Modell:       {gpu['name']}")
+            if gpu["temp"]:
+                print(f"  Temperatur:   {gpu['temp']}")
+            if gpu["takt"]:
+                print(f"  Takt:         {gpu['takt']}")
+            if gpu["auslastung"] is not None:
+                print(f"  Auslastung:   {bar(gpu['auslastung'])}")
+            if gpu["vram_used"] is not None and gpu["vram_total"] is not None:
+                vram_pct = gpu["vram_used"] / gpu["vram_total"] * 100
+                print(f"  VRAM:         {bar(vram_pct)}  ({gpu['vram_used']} / {gpu['vram_total']} MB)")
 
     # Netzwerk
     section("Netzwerk")
